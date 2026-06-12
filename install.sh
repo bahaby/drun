@@ -39,55 +39,56 @@ fi
 
 chmod +x "$TARGET_DIR/drun"
 
+# ==============================================================================
 # 5. Advanced Cross-Shell PATH Configuration
-# Detect the current shell layout precisely by checking the parent process configuration
+# ==============================================================================
 CURRENT_SHELL=$(basename "$SHELL")
-PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
 SHELL_CONFIG_FILE=""
+
+# Check standard profile targets based on the user's active shell
+case "$CURRENT_SHELL" in
+    bash)    SHELL_CONFIG_FILE="$HOME/.bashrc" ;;
+    zsh)     SHELL_CONFIG_FILE="$HOME/.zshrc" ;;
+    fish)    SHELL_CONFIG_FILE="$HOME/.config/fish/config.fish" ;;
+    sh|dash) SHELL_CONFIG_FILE="$HOME/.profile" ;;
+esac
 
 echo "🐚 Detecting environment shell layout... (Found: $CURRENT_SHELL)"
 
-case "$CURRENT_SHELL" in
-    bash)
-        # Always target .bashrc for interactive desktop shells
-        SHELL_CONFIG_FILE="$HOME/.bashrc"
-        [ -f "$SHELL_CONFIG_FILE" ] || touch "$SHELL_CONFIG_FILE"
-        
-        # Ensure .bash_profile sources .bashrc for login shells (common on macOS)
-        if [ -f "$HOME/.bash_profile" ]; then
-            if ! grep -Fq '.bashrc' "$HOME/.bash_profile" 2>/dev/null; then
-                echo -e "\n# Load .bashrc if it exists\nif [ -f ~/.bashrc ]; then . ~/.bashrc; fi" >> "$HOME/.bash_profile"
-            fi
-        fi
-        ;;
-    zsh)
-        SHELL_CONFIG_FILE="$HOME/.zshrc"
-        [ -f "$SHELL_CONFIG_FILE" ] || touch "$SHELL_CONFIG_FILE"
-        ;;
-    fish)
-        SHELL_CONFIG_FILE="$HOME/.config/fish/config.fish"
-        PATH_LINE='fish_add_path $HOME/.local/bin'
-        mkdir -p "$(dirname "$SHELL_CONFIG_FILE")"
-        [ -f "$SHELL_CONFIG_FILE" ] || touch "$SHELL_CONFIG_FILE"
-        ;;
-    sh|dash)
-        SHELL_CONFIG_FILE="$HOME/.profile"
-        [ -f "$SHELL_CONFIG_FILE" ] || touch "$SHELL_CONFIG_FILE"
-        ;;
-    *)
-        echo "⚠️  Unable to automatically configure PATH for shell: $CURRENT_SHELL"
-        echo "   Please manually add '$TARGET_DIR' to your system environment variables."
-        ;;
-esac
-
-# Append path configurations safely without duplicates
 if [ -n "$SHELL_CONFIG_FILE" ]; then
-    # Check for the EXACT line we are trying to add to prevent messiness
-    if ! grep -Fq "$PATH_LINE" "$SHELL_CONFIG_FILE" 2>/dev/null; then
+    # Ensure the target configuration directory and file exist
+    [ -f "$SHELL_CONFIG_FILE" ] || mkdir -p "$(dirname "$SHELL_CONFIG_FILE")" && touch "$SHELL_CONFIG_FILE"
+
+    # Define the precise injection line for adding the path cleanly
+    if [ "$CURRENT_SHELL" = "fish" ]; then
+        PATH_LINE='fish_add_path $HOME/.local/bin'
+        # Regular expression for fish files checking for .local/bin
+        GREP_REGEX="fish_add_path.*\.local/bin"
+    else
+        PATH_LINE='if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then PATH="$HOME/.local/bin:$PATH"; fi; export PATH'
+        # SMART REGEX: Matches any active line containing .local/bin, catching variations
+        # like: export PATH="$HOME/.local/bin:$PATH", PATH=~/.local/bin:$PATH, etc.
+        # It explicitly ignores lines that are commented out with '#'
+        GREP_REGEX="^[[:space:]]*[^#]*\.local/bin"
+    fi
+
+    # Check the file contents using the smart regex match
+    if grep -Eiq "$GREP_REGEX" "$SHELL_CONFIG_FILE" 2>/dev/null; then
+        echo "========================================================"
+        echo "✅ drun installation complete! (PATH configurations already exist in $SHELL_CONFIG_FILE)"
+        echo "========================================================"
+    else
         echo "⚙️  Adding bin configuration path to $SHELL_CONFIG_FILE..."
         echo "" >> "$SHELL_CONFIG_FILE"
         echo "$PATH_LINE" >> "$SHELL_CONFIG_FILE"
         
+        # If running Bash and .bash_profile exists, safely ensure it triggers .bashrc
+        if [ "$CURRENT_SHELL" = "bash" ] && [ -f "$HOME/.bash_profile" ]; then
+            if ! grep -Fq '.bashrc' "$HOME/.bash_profile" 2>/dev/null; then
+                echo -e "\n# Load .bashrc if it exists\nif [ -f ~/.bashrc ]; then . ~/.bashrc; fi" >> "$HOME/.bash_profile"
+            fi
+        fi
+
         echo "========================================================"
         echo "✅ drun installation complete!"
         if [ "$CURRENT_SHELL" = "fish" ]; then
@@ -97,9 +98,8 @@ if [ -n "$SHELL_CONFIG_FILE" ]; then
         fi
         echo "   or restart your active terminal session to finalize execution."
         echo "========================================================"
-    else
-        echo "========================================================"
-        echo "✅ drun installation complete! (PATH setup already configured)"
-        echo "========================================================"
     fi
+else
+    echo "⚠️  Unable to automatically configure path targets for shell: $CURRENT_SHELL"
+    echo "   Please manually add '\$HOME/.local/bin' to your system environment variables."
 fi
