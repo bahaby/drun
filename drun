@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+
+# ==============================================================================
+# CONFIGURATION (Do not manually edit the line below, use --set-home)
+# ==============================================================================
+DOCKER_BASE_DIR="$HOME/docker"
+# ==============================================================================
+
+SCRIPT_PATH="$(readlink -f "$0")"
+
+# 1. Action: Self-Update from GitHub Repository
+if [ "$1" = "--update" ]; then
+    echo "🔄 Checking for updates from GitHub..."
+    RAW_UPDATE_URL="https://raw.githubusercontent.com/bahaby/drun/main/drun"
+    
+    # Download the latest script to a temporary file first to make sure it works
+    TEMP_FILE=$(mktemp)
+    if curl -fsSL "$RAW_UPDATE_URL" -o "$TEMP_FILE"; then
+        # Check if the downloaded file is actually a script and not a 404 page
+        if head -n 1 "$TEMP_FILE" | grep -q "###############\|#!/usr/bin/env bash"; then
+            # Preserve the user's current DOCKER_BASE_DIR setting before overwriting
+            CURRENT_BASE=$(grep "^DOCKER_BASE_DIR=" "$SCRIPT_PATH")
+            sed -i "s|^DOCKER_BASE_DIR=.*|$CURRENT_BASE|" "$TEMP_FILE"
+            
+            # Overwrite the active script with the updated one
+            cat "$TEMP_FILE" > "$SCRIPT_PATH"
+            chmod +x "$SCRIPT_PATH"
+            rm "$TEMP_FILE"
+            echo "✅ drun has been successfully updated to the latest version!"
+            exit 0
+        fi
+    fi
+    echo "❌ Error: Could not download update. Check your internet connection or GitHub username config."
+    rm -f "$TEMP_FILE"
+    exit 1
+fi
+
+# 2. Action: Set the home directory
+if [ "$1" = "--set-home" ]; then
+    if [ -z "$2" ]; then
+        echo "❌ Error: Please provide a directory path."
+        echo "Usage: drun --set-home /path/to/your/docker/folder"
+        exit 1
+    fi
+    NEW_DIR=$(eval echo "$2")
+    if [ ! -d "$NEW_DIR" ]; then
+        echo "❌ Error: The directory '$NEW_DIR' does not exist."
+        exit 1
+    fi
+    sed -i "s|^DOCKER_BASE_DIR=.*|DOCKER_BASE_DIR=\"$NEW_DIR\"|" "$SCRIPT_PATH"
+    echo "✅ Success! Default Docker directory permanently updated to: $NEW_DIR"
+    exit 0
+fi
+
+# 3. Action: List all executable docker folders
+if [ "$1" = "--list" ] || [ "$1" = "-l" ]; then
+    echo "========================================================"
+    echo "📁 Available Docker Stacks in: $DOCKER_BASE_DIR"
+    echo "========================================================"
+    if [ ! -d "$DOCKER_BASE_DIR" ]; then
+        echo "❌ Base directory does not exist yet."
+        exit 1
+    fi
+    
+    folder_count=0
+    for dir in "$DOCKER_BASE_DIR"/*/; do
+        [ -e "$dir" ] || break
+        files=$(find "$dir" -maxdepth 1 -name "*.yml" -o -name "*.yaml" 2>/dev/null)
+        if [ -n "$files" ]; then
+            echo "  📦 $(basename "$dir")"
+            for f in $files; do
+                echo "     📄 $(basename "$f")"
+            done
+            folder_count=$((folder_count + 1))
+        fi
+    done
+    if [ $folder_count -eq 0 ]; then
+        echo "  No folders with .yml or .yaml files found."
+    fi
+    echo "========================================================"
+    exit 0
+fi
+
+# 4. Action: Check global status of all containers
+if [ "$1" = "--status" ] || [ "$1" = "-s" ]; then
+    echo "========================================================"
+    echo "📊 Managed Folder Status ($DOCKER_BASE_DIR)"
+    echo "========================================================"
+    if [ ! -d "$DOCKER_BASE_DIR" ]; then
+        echo "❌ Base directory does not exist."
+        exit 1
+    fi
+
+    folder_count=0
+    running_count=0
+    status_output=""
+
+    for dir in "$DOCKER_BASE_DIR"/*/; do
+        [ -d "$dir" ] || break
+        folder_count=$((folder_count + 1))
+        folder_name=$(basename "$dir")
+        
+        if docker compose ls --format json | grep -q "\"Project\":\"$folder_name\""; then
+            status_output+="  🟢 RUNNING  ->  📦 $folder_name\n"
+            running_count=$((running_count + 1))
+        else
+            status_output+="  🔴 STOPPED  ->  📦 $folder_name\n"
+        fi
+    done
+
+    if [ $folder_count -eq 0 ]; then
+        echo "  📂 No project folders found inside $DOCKER_BASE_DIR"
+    elif [ $running_count -eq 0 ]; then
+        echo "  💤 All managed folders are currently offline."
+        echo "--------------------------------------------------------"
+        echo -e "$status_output" | grep "🔴"
+    else
+        echo -e "$status_output"
+    fi
+
+    echo "========================================================"
+    echo "🐋 Active Containers details:"
+    echo "========================================================"
+    if [ -z "$(docker ps -q)" ]; then
+        echo "  ✨ No active docker containers running right now."
+    else
+        docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+    fi
+    echo "========================================================"
+    exit 0
+fi
+
+# 5. Action: Stop absolutely everything
+if [ "$1" = "--stop-all" ]; then
+    echo "⚠️  Warning: This will stop ALL docker compose stacks in $DOCKER_BASE_DIR."
+    read -p "Are you sure you want to proceed? (y/N): " -r
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        for dir in "$DOCKER_BASE_DIR"/*/; do
+            [ -e "$dir" ] || break
+            if find "$dir" -maxdepth 1 -name "*.yml" -o -name "*.yaml" &>/dev/null; then
+                echo "🛑 Stopping $(basename "$dir")...."
+                (cd "$dir" && docker compose down)
+            fi
+        done
+        echo "✅ All stacks stopped."
+    else
+        echo "Operation cancelled."
+    fi
+    exit 0
+fi
+
+# 6. Help Menu
+if [ -z "$1" ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+    echo "========================================================"
+    echo "🐳 drun - Smart Docker Compose Wrapper"
+    echo "========================================================"
+    echo "Current Docker Base Directory:"
+    echo "  $DOCKER_BASE_DIR"
+    echo ""
+    echo "Management Commands:"
+    echo "  drun --list, -l             -> List all folders with valid yaml files"
+    echo "  drun --status, -s           -> View all active stacks and containers"
+    echo "  drun --update               -> Pull down latest version from GitHub"
+    echo "  drun --stop-all             -> Prompt to down/stop EVERY local stack"
+    echo "  drun --set-home <path>      -> Permanently change the default folder"
+    echo ""
+    echo "Container Usage:"
+    echo "  drun <folder_name> [config_name] <command> [options]"
+    echo ""
+    echo "Examples:"
+    echo "  drun nextcloud up -d        -> Start standard stack"
+    echo "  drun nextcloud test up -d   -> Start test.yml stack"
+    echo "  drun nextcloud down         -> Stop stack"
+    echo "========================================================"
+    exit 0
+fi
+
+# 7. Standard Execution Logic
+TARGET_DIR="$DOCKER_BASE_DIR/$1"
+if [ ! -d "$TARGET_DIR" ]; then
+    echo "❌ Error: Directory $TARGET_DIR does not exist."
+    exit 1
+fi
+
+cd "$TARGET_DIR" || exit 1
+docker_cmds="up down start stop restart ps logs build exec run pull rm config"
+
+if [ -n "$2" ] && [[ ! " $docker_cmds " =~ " $2 " ]]; then
+    file_prefix="$2"
+    file_name=""
+    shift 2
+
+    if [ -f "${file_prefix}.yml" ]; then
+        file_name="${file_prefix}.yml"
+    elif [ -f "${file_prefix}.yaml" ]; then
+        file_name="${file_prefix}.yaml"
+    else
+        echo "❌ Error: Neither ${file_prefix}.yml nor ${file_prefix}.yaml found in $(pwd)"
+        exit 1
+    fi
+    docker compose -f "$file_name" "$@"
+else
+    shift 1
+    docker compose "$@"
+fi
