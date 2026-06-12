@@ -3,7 +3,7 @@
 # ==============================================================================
 # CONFIGURATION (Do not manually edit the line below, use --set-home)
 # ==============================================================================
-DOCKER_BASE_DIR="/Users/baha/Code/Docker"
+DOCKER_BASE_DIR="$HOME/docker"
 # ==============================================================================
 
 SCRIPT_PATH="$(readlink -f "$0")"
